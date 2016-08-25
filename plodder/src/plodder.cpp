@@ -11,8 +11,14 @@
 #include <stdint.h>
 #include "GPIOManip.h"
 #include "mic.h"
+#include <nghttp2/asio_http2_client.h>
 
 using namespace std;
+
+using boost::asio::ip::tcp;
+
+using namespace nghttp2::asio_http2;
+using namespace nghttp2::asio_http2::client;
 
 
 static void doAmazonStuff() {
@@ -119,8 +125,73 @@ static gboolean onButtonEvent(GIOChannel *channel, GIOCondition condition, gpoin
 //    return 0;
 //}
 
+void doHTTPStuff() {
+try{
+    boost::system::error_code ec;
+    boost::asio::io_service io_service;
+
+    std::string uri = "https://google.com";
+    std::string scheme, host, service;
+
+    if (host_service_from_uri(ec, scheme, host, service, uri)) {
+      std::cerr << "error: bad URI: " << ec.message() << std::endl;
+      exit(1);
+    }
+
+    boost::asio::ssl::context tls_ctx(boost::asio::ssl::context::sslv23);
+    tls_ctx.set_default_verify_paths();
+    // disabled to make development easier...
+    // tls_ctx.set_verify_mode(boost::asio::ssl::verify_peer);
+    configure_tls_context(ec, tls_ctx);
+
+    auto sess = scheme == "https" ? session(io_service, tls_ctx, host, service)
+                                  : session(io_service, host, service);
+
+    sess.on_connect([&sess, &uri](tcp::resolver::iterator endpoint_it) {
+      boost::system::error_code ec;
+
+      auto req = sess.submit(ec, "GET", uri);
+
+      if (ec) {
+        std::cerr << "error: " << ec.message() << std::endl;
+        return;
+      }
+
+      req->on_response([&sess](const response &res) {
+        std::cerr << "HTTP/2 " << res.status_code() << std::endl;
+        for (auto &kv : res.header()) {
+          std::cerr << kv.first << ": " << kv.second.value << "\n";
+        }
+        std::cerr << std::endl;
+
+        res.on_data([&sess](const uint8_t *data, std::size_t len) {
+          std::cerr.write(reinterpret_cast<const char *>(data), len);
+          std::cerr << std::endl;
+        });
+      });
+
+      req->on_close([&sess](uint32_t error_code) { sess.shutdown(); });
+    });
+
+    sess.on_error([](const boost::system::error_code &ec) {
+      std::cerr << "error: " << ec.message() << std::endl;
+    });
+
+    io_service.run();
+  } catch (std::exception &e) {
+    std::cerr << "exception: " << e.what() << "\n";
+  }
+
+}
 
 int main() {
+
+
+    doHTTPStuff();
+
+    sleep(10);
+    cerr << "FIN!" << endl;
+    exit(0);
 
 	char *buffer;
     string state;
